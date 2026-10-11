@@ -21,7 +21,14 @@ ALLOWED_HOSTS = {urlparse(s["url"]).hostname for s in REGISTRY["sources"]}
 
 app = FastAPI(title="Nigerian Legal AI Backend", version="0.1.0",
               description="Starter backend for source-registered Nigerian legal research and retrieval-grounded AI.")
+from fastapi.middleware.cors import CORSMiddleware
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 def db():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
