@@ -10,7 +10,7 @@ from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 
 load_dotenv()
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
 DB_PATH = DATA / "legal_ai.sqlite3"
 REGISTRY_PATH = ROOT / "source_registry.json"
