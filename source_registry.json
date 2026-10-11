@@ -1,0 +1,94 @@
+{
+  "registry_version": "1.0",
+  "purpose": "Official-first source directory. Listing a portal does not mean all its contents have been downloaded, indexed, or verified.",
+  "sources": [
+    {
+      "authority": "National Assembly of Nigeria",
+      "category": "legislation and legislative publications",
+      "url": "https://nass.gov.ng/documents/magazine",
+      "jurisdiction": "Federal",
+      "priority": "primary",
+      "notes": "Check whether each item is an enacted Act, bill, gazette, or other publication. Verify assent, commencement, amendments, and repeal."
+    },
+    {
+      "authority": "Supreme Court of Nigeria",
+      "category": "judgments",
+      "url": "https://www.supremecourt.gov.ng/judgment",
+      "jurisdiction": "Federal",
+      "priority": "primary",
+      "notes": "Record appeal number, judgment date, full text, subsequent treatment, and appellate history where available."
+    },
+    {
+      "authority": "Court of Appeal of Nigeria",
+      "category": "judgments",
+      "url": "https://courtofappeal.gov.ng/new_decisions.php",
+      "jurisdiction": "Federal",
+      "priority": "primary",
+      "notes": "Verify full judgment and any later Supreme Court treatment before relying on a proposition."
+    },
+    {
+      "authority": "Corporate Affairs Commission",
+      "category": "company law resources and regulations",
+      "url": "https://www.cac.gov.ng/resources",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "notes": "Verify document identity, version, and current status."
+    },
+    {
+      "authority": "Securities and Exchange Commission Nigeria",
+      "category": "capital markets laws, rules and guidance",
+      "url": "https://sec.gov.ng/our-mandate/regulation/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "notes": "Check current Act and rules; portals may contain historical as well as current instruments."
+    },
+    {
+      "authority": "Central Bank of Nigeria",
+      "category": "financial regulation and supervision",
+      "url": "https://www.cbn.gov.ng/supervision/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "notes": "Retrieve the specific circular, guideline, Act or regulation and verify issue date and current status."
+    },
+    {
+      "authority": "Federal Ministry of Justice — Department of Law Reporting and Publication",
+      "category": "official law reports and Laws of the Federation of Nigeria information",
+      "url": "https://justice.gov.ng/law-reporting/",
+      "jurisdiction": "Federal",
+      "priority": "official government publication",
+      "notes": "The page describes official law-reporting functions and publications. It is a discovery portal; verify availability, licensing, full text, edition and current status of each item."
+    }
+  ],
+  "additional_sources_to_review": [
+    {
+      "authority": "Federal Gazette and official government publications",
+      "category": "legislation and subsidiary legislation",
+      "notes": "Record gazette number and date; add verified official URLs."
+    },
+    {
+      "authority": "Lagos State Government and Lagos State Gazette",
+      "category": "Lagos State legislation",
+      "notes": "Add official state laws and subsidiary legislation for Lagos-specific questions."
+    },
+    {
+      "authority": "Nigeria Data Protection Commission",
+      "category": "data protection",
+      "url": "https://ndpc.gov.ng/"
+    },
+    {
+      "authority": "Federal Competition and Consumer Protection Commission",
+      "category": "competition and consumer protection",
+      "url": "https://fccpc.gov.ng/"
+    },
+    {
+      "authority": "Nigerian Upstream Petroleum Regulatory Commission",
+      "category": "upstream petroleum regulation",
+      "url": "https://www.nuprc.gov.ng/"
+    },
+    {
+      "authority": "Nigerian Electricity Regulatory Commission",
+      "category": "electricity regulation",
+      "url": "https://nerc.gov.ng/"
+    }
+  ]
+}

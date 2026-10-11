@@ -1,0 +1,18 @@
+# Render Blueprint — deploy this repo as a Web Service
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: nigerian-legal-ai-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false   # set manually in Render dashboard
+      - key: OPENAI_MODEL
+        value: gpt-4.1-mini
+    # SQLite lives on the ephemeral filesystem (free tier).
+    # Data is lost on every deploy/restart. For persistence use a paid disk
+    # or switch to PostgreSQL later.
