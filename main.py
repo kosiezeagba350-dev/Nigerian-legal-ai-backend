@@ -197,7 +197,7 @@ def ask(payload: SearchRequest):
         return {"answer":"Relevant passages retrieved. Set OPENAI_API_KEY in .env to enable AI-generated answers; inspect the evidence below in the meantime.","sources":refs,"requires_lawyer_review":True}
     try:
         from openai import OpenAI
-        client=OpenAI(api_key=key)
+        client=OpenAI(api_key=key, base_url=os.getenv("OPENAI_BASE_URL") or None)
         evidence=[]
         for i,h in enumerate(hits,1):
             evidence.append(f"[SOURCE {i}]\nTitle: {h['title']}\nAuthority: {h['source_authority']}\nURL: {h['source_url']}\nType: {h['document_type']}\nPublished: {h['publication_date']}\nEffective from: {h['effective_from']}\nStatus: {h['status']}\nVerification: {h['verification_status']}\nPassage:\n{h['text_content']}")
