@@ -1,94 +1,170 @@
 {
-  "registry_version": "1.0",
-  "purpose": "Official-first source directory. Listing a portal does not mean all its contents have been downloaded, indexed, or verified.",
+  "registry_version": "1.1",
+  "purpose": "Official-first directory of Nigerian legal information sources. Registration does not mean documents have been downloaded, indexed, authenticated, or verified as current.",
   "sources": [
     {
       "authority": "National Assembly of Nigeria",
-      "category": "legislation and legislative publications",
+      "category": "Federal legislation and legislative publications",
       "url": "https://nass.gov.ng/documents/magazine",
       "jurisdiction": "Federal",
       "priority": "primary",
-      "notes": "Check whether each item is an enacted Act, bill, gazette, or other publication. Verify assent, commencement, amendments, and repeal."
+      "document_types": ["Acts", "Bills", "Legislative publications"],
+      "notes": "Distinguish enacted Acts from bills and other publications. Verify assent, commencement, amendments, repeal, and authoritative text."
     },
     {
-      "authority": "Supreme Court of Nigeria",
-      "category": "judgments",
-      "url": "https://www.supremecourt.gov.ng/judgment",
+      "authority": "Federal Ministry of Justice",
+      "category": "Federal laws and official legal publications",
+      "url": "https://justice.gov.ng/",
       "jurisdiction": "Federal",
       "priority": "primary",
-      "notes": "Record appeal number, judgment date, full text, subsequent treatment, and appellate history where available."
+      "document_types": ["Legislation", "Official law reports", "Legal publications"],
+      "notes": "Use as a discovery portal. Verify the identity, edition, completeness, availability, licensing, and current status of each document."
     },
     {
-      "authority": "Court of Appeal of Nigeria",
-      "category": "judgments",
-      "url": "https://courtofappeal.gov.ng/new_decisions.php",
-      "jurisdiction": "Federal",
-      "priority": "primary",
-      "notes": "Verify full judgment and any later Supreme Court treatment before relying on a proposition."
-    },
-    {
-      "authority": "Corporate Affairs Commission",
-      "category": "company law resources and regulations",
-      "url": "https://www.cac.gov.ng/resources",
-      "jurisdiction": "Federal",
-      "priority": "official regulator",
-      "notes": "Verify document identity, version, and current status."
-    },
-    {
-      "authority": "Securities and Exchange Commission Nigeria",
-      "category": "capital markets laws, rules and guidance",
-      "url": "https://sec.gov.ng/our-mandate/regulation/",
-      "jurisdiction": "Federal",
-      "priority": "official regulator",
-      "notes": "Check current Act and rules; portals may contain historical as well as current instruments."
-    },
-    {
-      "authority": "Central Bank of Nigeria",
-      "category": "financial regulation and supervision",
-      "url": "https://www.cbn.gov.ng/supervision/",
-      "jurisdiction": "Federal",
-      "priority": "official regulator",
-      "notes": "Retrieve the specific circular, guideline, Act or regulation and verify issue date and current status."
-    },
-    {
-      "authority": "Federal Ministry of Justice — Department of Law Reporting and Publication",
-      "category": "official law reports and Laws of the Federation of Nigeria information",
+      "authority": "Federal Ministry of Justice - Department of Law Reporting and Publication",
+      "category": "Official law reports and Laws of the Federation of Nigeria",
       "url": "https://justice.gov.ng/law-reporting/",
       "jurisdiction": "Federal",
       "priority": "official government publication",
-      "notes": "The page describes official law-reporting functions and publications. It is a discovery portal; verify availability, licensing, full text, edition and current status of each item."
+      "document_types": ["Law reports", "Laws of the Federation of Nigeria", "Legal publications"],
+      "notes": "Contact the Department for access, editions, digital availability, and licensing. Do not assume this page provides a complete downloadable corpus."
+    },
+    {
+      "authority": "Supreme Court of Nigeria",
+      "category": "Supreme Court judgments and judicial materials",
+      "url": "https://www.supremecourt.gov.ng/judgment",
+      "jurisdiction": "Federal",
+      "priority": "primary judicial authority",
+      "document_types": ["Judgments", "Rulings"],
+      "notes": "Record case title, appeal number, judgment date, full text, citations, and subsequent judicial treatment where available."
+    },
+    {
+      "authority": "Court of Appeal of Nigeria",
+      "category": "Court of Appeal judgments",
+      "url": "https://courtofappeal.gov.ng/new_decisions.php",
+      "jurisdiction": "Federal",
+      "priority": "primary judicial authority",
+      "document_types": ["Judgments", "Rulings"],
+      "notes": "Verify the official domain and availability of each decision. Record appeal number, judgment date, panel, and subsequent Supreme Court treatment where established."
+    },
+    {
+      "authority": "Nigeria Legal Information Institute",
+      "category": "Public legal information and judicial decisions",
+      "url": "https://nigerialii.org/",
+      "jurisdiction": "Nigeria",
+      "priority": "secondary discovery source",
+      "document_types": ["Judgments", "Legal materials"],
+      "notes": "Useful for discovering judgments and legal materials. Verify judgments against official court sources where possible and check the terms governing bulk use."
+    },
+    {
+      "authority": "Corporate Affairs Commission",
+      "category": "Company law resources and regulatory materials",
+      "url": "https://www.cac.gov.ng/resources",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Regulations", "Guidance", "Company law resources"],
+      "notes": "Distinguish legislation from guidance and administrative materials. Verify document version and current status."
+    },
+    {
+      "authority": "Securities and Exchange Commission Nigeria",
+      "category": "Capital markets laws, rules, and guidance",
+      "url": "https://sec.gov.ng/our-mandate/regulation/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Rules", "Regulations", "Circulars", "Guidance"],
+      "notes": "Verify the enabling Act, commencement, amendments, effective dates, and current status of each instrument."
+    },
+    {
+      "authority": "Central Bank of Nigeria",
+      "category": "Banking and financial regulation",
+      "url": "https://www.cbn.gov.ng/supervision/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Circulars", "Guidelines", "Regulations", "Financial legislation"],
+      "notes": "Register specific instruments where possible. Record publication date, effective date, issuing authority, and subsequent amendments."
+    },
+    {
+      "authority": "Nigeria Data Protection Commission",
+      "category": "Data protection and privacy regulation",
+      "url": "https://ndpc.gov.ng/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Regulations", "Guidance", "Enforcement materials"],
+      "notes": "Verify the legal basis, publication date, applicability, and current status of each instrument."
+    },
+    {
+      "authority": "Federal Competition and Consumer Protection Commission",
+      "category": "Competition and consumer protection",
+      "url": "https://fccpc.gov.ng/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Regulations", "Guidance", "Enforcement materials"],
+      "notes": "Distinguish binding instruments from explanatory guidance and press releases."
+    },
+    {
+      "authority": "Nigerian Upstream Petroleum Regulatory Commission",
+      "category": "Upstream petroleum regulation",
+      "url": "https://www.nuprc.gov.ng/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Regulations", "Guidelines", "Circulars"],
+      "notes": "Check the enabling legislation, issuing authority, effective date, amendments, and current regulatory status."
+    },
+    {
+      "authority": "Nigerian Electricity Regulatory Commission",
+      "category": "Electricity regulation",
+      "url": "https://nerc.gov.ng/",
+      "jurisdiction": "Federal",
+      "priority": "official regulator",
+      "document_types": ["Regulations", "Orders", "Guidelines", "Decisions"],
+      "notes": "Verify the applicable regulatory framework, effective date, territorial scope, and current status of each instrument."
+    },
+    {
+      "authority": "Lagos State Government",
+      "category": "Lagos State laws and gazettes",
+      "url": "https://lagosstate.gov.ng/",
+      "jurisdiction": "Lagos State",
+      "priority": "official state government",
+      "document_types": ["State legislation", "Gazettes", "Government publications"],
+      "notes": "Use as a discovery portal. Identify the specific official law or gazette URL before ingestion and verify enactment, commencement, amendments, and territorial scope."
     }
   ],
   "additional_sources_to_review": [
     {
       "authority": "Federal Gazette and official government publications",
-      "category": "legislation and subsidiary legislation",
-      "notes": "Record gazette number and date; add verified official URLs."
+      "category": "Federal legislation and subsidiary legislation",
+      "jurisdiction": "Federal",
+      "notes": "Identify an appropriate official publication or repository URL. Record gazette number, publication date, and relevant legal status."
     },
     {
-      "authority": "Lagos State Government and Lagos State Gazette",
-      "category": "Lagos State legislation",
-      "notes": "Add official state laws and subsidiary legislation for Lagos-specific questions."
+      "authority": "Lagos State Gazette",
+      "category": "State legislation and subsidiary legislation",
+      "jurisdiction": "Lagos State",
+      "notes": "Identify the specific official gazette or law document URL. Record publication date, number, commencement, and amendments."
     },
     {
-      "authority": "Nigeria Data Protection Commission",
-      "category": "data protection",
-      "url": "https://ndpc.gov.ng/"
+      "authority": "Other State Governments and State Gazettes",
+      "category": "State legislation and subsidiary legislation",
+      "jurisdiction": "State-specific",
+      "notes": "Add each state separately using verified official sources. Do not assume Lagos State law applies throughout Nigeria."
     },
     {
-      "authority": "Federal Competition and Consumer Protection Commission",
-      "category": "competition and consumer protection",
-      "url": "https://fccpc.gov.ng/"
+      "authority": "Federal High Court of Nigeria",
+      "category": "Federal High Court judgments",
+      "jurisdiction": "Federal",
+      "notes": "Identify an official judgment repository or obtain appropriately licensed judgments. Record the division, suit number, date, and subsequent appellate history."
     },
     {
-      "authority": "Nigerian Upstream Petroleum Regulatory Commission",
-      "category": "upstream petroleum regulation",
-      "url": "https://www.nuprc.gov.ng/"
+      "authority": "National Industrial Court of Nigeria",
+      "category": "Employment, labour, and industrial relations judgments",
+      "jurisdiction": "Federal",
+      "notes": "Identify the official decisions repository and verify the full text and subsequent appellate history of each judgment."
     },
     {
-      "authority": "Nigerian Electricity Regulatory Commission",
-      "category": "electricity regulation",
-      "url": "https://nerc.gov.ng/"
+      "authority": "State High Courts and other competent courts",
+      "category": "State and specialist court judgments",
+      "jurisdiction": "State-specific",
+      "notes": "Add verified court-specific repositories. Record court, division, case number, date, and jurisdiction."
     }
   ]
 }
