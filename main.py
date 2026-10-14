@@ -1,31 +1,63 @@
-import os, re, json, hashlib
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import os
+import re
+import json
+import hashlib
+from io import BytesIO
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
+
+
+# --------------------------------------------------
+# 1. CONFIGURATION
+# --------------------------------------------------
+
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
 REGISTRY_PATH = ROOT / "source_registry.json"
-DATA.mkdir(exist_ok=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL environment variable is not configured")
+    raise RuntimeError(
+        "DATABASE_URL is missing. Configure it in your hosting environment."
+    )
+
+if not REGISTRY_PATH.exists():
+    raise RuntimeError("source_registry.json was not found.")
+
 with open(REGISTRY_PATH, encoding="utf-8") as f:
     REGISTRY = json.load(f)
-ALLOWED_HOSTS = {urlparse(s["url"]).hostname for s in REGISTRY["sources"]}
 
-app = FastAPI(title="Nigerian Legal AI Backend", version="0.1.0",
-              description="Starter backend for source-registered Nigerian legal research and retrieval-grounded AI.")
-from fastapi.middleware.cors import CORSMiddleware
+ALLOWED_HOSTS = {
+    urlparse(source["url"]).hostname
+    for source in REGISTRY["sources"]
+}
+
+
+# --------------------------------------------------
+# 2. FASTAPI APPLICATION
+# --------------------------------------------------
+
+app = FastAPI(
+    title="Nigerian Legal AI Backend",
+    version="0.2.0",
+    description=(
+        "A source-registered Nigerian legal research backend "
+        "with document ingestion and retrieval-grounded AI."
+    ),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,17 +65,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --------------------------------------------------
+# 3. NEON POSTGRESQL CONNECTION
+# --------------------------------------------------
+
+@contextmanager
 def db():
-    return psycopg2.connect(
+    con = psycopg2.connect(
         DATABASE_URL,
         cursor_factory=RealDictCursor,
         sslmode="require",
+        connect_timeout=10,
     )
 
+    try:
+        yield con
+        con.commit()
+
+    except Exception:
+        con.rollback()
+        raise
+
+    finally:
+        con.close()
+
+
+# --------------------------------------------------
+# 4. DATABASE TABLES
+# --------------------------------------------------
 
 def init_db():
     with db() as con:
         with con.cursor() as cur:
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS documents (
                     id BIGSERIAL PRIMARY KEY,
@@ -73,19 +129,24 @@ def init_db():
             """)
 
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS
-                idx_chunks_document_id
+                CREATE INDEX IF NOT EXISTS idx_chunks_document_id
                 ON chunks(document_id)
             """)
 
             cur.execute("""
-                CREATE INDEX IF NOT EXISTS
-                idx_documents_sha256
+                CREATE INDEX IF NOT EXISTS idx_documents_sha256
                 ON documents(sha256)
             """)
 
 
+# Create tables when the application starts.
 init_db()
+
+
+# --------------------------------------------------
+# 5. REQUEST MODELS
+# --------------------------------------------------
+
 class URLIngest(BaseModel):
     url: HttpUrl
     title: str | None = None
@@ -95,210 +156,724 @@ class URLIngest(BaseModel):
     effective_from: str | None = None
     status: str = "unverified"
 
+
 class SearchRequest(BaseModel):
     question: str
     top_k: int = 6
 
-def extract_text(filename: str, content: bytes, content_type: str = "") -> str:
+
+# --------------------------------------------------
+# 6. DOCUMENT TEXT EXTRACTION
+# --------------------------------------------------
+
+def extract_text(
+    filename: str,
+    content: bytes,
+    content_type: str = "",
+) -> str:
+
     suffix = Path(filename).suffix.lower()
+
     if suffix == ".pdf" or "pdf" in content_type.lower():
         try:
             from pypdf import PdfReader
-            import io
-            return "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(content)).pages).strip()
+
+            reader = PdfReader(BytesIO(content))
+
+            return "\n".join(
+                page.extract_text() or ""
+                for page in reader.pages
+            ).strip()
+
         except Exception as e:
-            raise HTTPException(400, f"Could not extract PDF text; scanned PDFs may need OCR: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not extract PDF text. "
+                    f"Scanned PDFs may require OCR. Details: {e}"
+                ),
+            )
+
     if suffix == ".docx":
         try:
             from docx import Document
-            import io
-            return "\n".join(p.text for p in Document(io.BytesIO(content)).paragraphs).strip()
+
+            document = Document(BytesIO(content))
+
+            return "\n".join(
+                paragraph.text
+                for paragraph in document.paragraphs
+            ).strip()
+
         except Exception as e:
-            raise HTTPException(400, f"Could not extract DOCX text: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not extract DOCX text: {e}",
+            )
+
     if suffix in {".html", ".htm"} or "html" in content_type.lower():
         soup = BeautifulSoup(content, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header"]): tag.decompose()
-        return soup.get_text("\n", strip=True)
-    return content.decode("utf-8", errors="replace").strip()
 
-def chunk_text(text: str, size: int = 1200, overlap: int = 180):
+        for tag in soup([
+            "script",
+            "style",
+            "nav",
+            "footer",
+            "header",
+        ]):
+            tag.decompose()
+
+        return soup.get_text("\n", strip=True)
+
+    return content.decode(
+        "utf-8",
+        errors="replace",
+    ).strip()
+
+
+# --------------------------------------------------
+# 7. SPLIT DOCUMENTS INTO SEARCHABLE CHUNKS
+# --------------------------------------------------
+
+def chunk_text(
+    text: str,
+    size: int = 1200,
+    overlap: int = 180,
+):
+
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    chunks, start = [], 0
+
+    chunks = []
+    start = 0
+
     while start < len(text):
+
         end = min(len(text), start + size)
+
         if end < len(text):
-            boundary = max(text.rfind("\n", start, end), text.rfind(". ", start, end))
-            if boundary > start + int(size * .55): end = boundary + 1
-        chunks.append(text[start:end].strip())
-        if end >= len(text): break
-        start = max(end - overlap, start + 1)
-    return [c for c in chunks if c]
+
+            boundary = max(
+                text.rfind("\n", start, end),
+                text.rfind(". ", start, end),
+            )
+
+            if boundary > start + int(size * 0.55):
+                end = boundary + 1
+
+        piece = text[start:end].strip()
+
+        if piece:
+            chunks.append(piece)
+
+        if end >= len(text):
+            break
+
+        start = max(
+            end - overlap,
+            start + 1,
+        )
+
+    return chunks
+
+
+# --------------------------------------------------
+# 8. IDENTIFY THE SOURCE AUTHORITY
+# --------------------------------------------------
 
 def authority_for_url(url):
+
     host = urlparse(url).hostname or ""
-    for item in REGISTRY["sources"]:
-        if host == (urlparse(item["url"]).hostname or ""): return item["authority"]
+
+    for source in REGISTRY["sources"]:
+
+        registered_host = (
+            urlparse(source["url"]).hostname or ""
+        )
+
+        if host == registered_host:
+            return source["authority"]
+
     return host
 
-def save_document(title, text, source_url=None, authority=None, document_type="unclassified", jurisdiction="Federal",
-                  publication_date=None, effective_from=None, status="unverified", verification_status="pending"):
+
+# --------------------------------------------------
+# 9. SAVE DOCUMENTS TO NEON POSTGRESQL
+# --------------------------------------------------
+
+def save_document(
+    title,
+    text,
+    source_url=None,
+    authority=None,
+    document_type="unclassified",
+    jurisdiction="Federal",
+    publication_date=None,
+    effective_from=None,
+    status="unverified",
+    verification_status="pending",
+):
+
     if len(text.strip()) < 80:
-        raise HTTPException(400, "Too little readable text extracted. Scanned files may need OCR.")
-    sha = hashlib.sha256(text.encode()).hexdigest()
-    now = datetime.now(timezone.utc).isoformat()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Too little readable text was extracted. "
+                "Scanned files may need OCR."
+            ),
+        )
+
+    sha = hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+
+    now = datetime.now(
+        timezone.utc
+    ).isoformat()
+
     pieces = chunk_text(text)
+
     with db() as con:
-        cur = con.cursor()
-with db() as con:
-    with con.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM documents")
-        n = cur.fetchone()["n"]
-        if old: return {"document_id": old["id"], "duplicate": True, "message": "Exact text already indexed."}
-        cur.execute("""
-    INSERT INTO documents (
-        title, source_url, source_authority, document_type,
-        jurisdiction, publication_date, effective_from,
-        status, verification_status, sha256,
-        text_content, ingested_at
-    )
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    RETURNING id
-""", (
-    title, source_url, authority, document_type,
-    jurisdiction, publication_date, effective_from,
-    status, verification_status, sha, text, now
-))
 
-doc_id = cur.fetchone()["id"]
+        with con.cursor() as cur:
 
-cur.executemany(
-    """
-    INSERT INTO chunks (
-        document_id, chunk_index, text_content
-    )
-    VALUES (%s, %s, %s)
-    """,
-    [(doc_id, i, c) for i, c in enumerate(pieces)]
-)
-    return {"document_id": doc_id, "chunks_created": len(pieces), "duplicate": False,
-            "verification_status": verification_status,
-            "note": "Indexed for retrieval; verify identity, current force, amendments and commencement before legal reliance."}
+            # Check whether this exact document already exists.
+            cur.execute(
+                """
+                SELECT id
+                FROM documents
+                WHERE sha256 = %s
+                """,
+                (sha,),
+            )
+
+            old = cur.fetchone()
+
+            if old:
+                return {
+                    "document_id": old["id"],
+                    "duplicate": True,
+                    "message": "Exact text already indexed.",
+                }
+
+            # Save the document and obtain its database ID.
+            cur.execute(
+                """
+                INSERT INTO documents (
+                    title,
+                    source_url,
+                    source_authority,
+                    document_type,
+                    jurisdiction,
+                    publication_date,
+                    effective_from,
+                    status,
+                    verification_status,
+                    sha256,
+                    text_content,
+                    ingested_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    title,
+                    source_url,
+                    authority,
+                    document_type,
+                    jurisdiction,
+                    publication_date,
+                    effective_from,
+                    status,
+                    verification_status,
+                    sha,
+                    text,
+                    now,
+                ),
+            )
+
+            doc_id = cur.fetchone()["id"]
+
+            # Save the searchable text chunks.
+            cur.executemany(
+                """
+                INSERT INTO chunks (
+                    document_id,
+                    chunk_index,
+                    text_content
+                )
+                VALUES (%s, %s, %s)
+                """,
+                [
+                    (doc_id, i, piece)
+                    for i, piece in enumerate(pieces)
+                ],
+            )
+
+    return {
+        "document_id": doc_id,
+        "chunks_created": len(pieces),
+        "duplicate": False,
+        "verification_status": verification_status,
+        "note": (
+            "Document indexed. Verify its identity, current legal "
+            "status, amendments, commencement and applicability "
+            "before relying on it."
+        ),
+    }
+
+
+# --------------------------------------------------
+# 10. HOME ENDPOINT
+# --------------------------------------------------
 
 @app.get("/")
 def root():
-    return {"name":"Nigerian Legal AI Backend", "status":"running",
-            "note":"Starter only. Source portals are registered; full law documents have not been preloaded."}
+
+    return {
+        "name": "Nigerian Legal AI Backend",
+        "status": "running",
+        "database": "PostgreSQL",
+        "note": (
+            "The backend is running. Legal documents must be "
+            "ingested before the system can retrieve them."
+        ),
+    }
+
+
+# --------------------------------------------------
+# 11. HEALTH CHECK
+# --------------------------------------------------
 
 @app.get("/health")
 def health():
-    with db() as con: n = con.execute("SELECT COUNT(*) n FROM documents").fetchone()["n"]
-    return {"ok":True,"indexed_documents":n}
+
+    with db() as con:
+
+        with con.cursor() as cur:
+
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM documents"
+            )
+
+            count = cur.fetchone()["n"]
+
+    return {
+        "ok": True,
+        "database": "connected",
+        "indexed_documents": count,
+    }
+
+
+# --------------------------------------------------
+# 12. VIEW REGISTERED SOURCES
+# --------------------------------------------------
 
 @app.get("/sources")
-def sources(): return REGISTRY
+def sources():
+
+    return REGISTRY
+
+
+# --------------------------------------------------
+# 13. VIEW INDEXED DOCUMENTS
+# --------------------------------------------------
 
 @app.get("/documents")
 def documents():
-    with db() as con:
-        with db() as con:
-    with con.cursor() as cur:
-        cur.execute("""
-            SELECT
-                id, title, source_url, source_authority,
-                document_type, jurisdiction, publication_date,
-                effective_from, status, verification_status,
-                ingested_at
-            FROM documents
-            ORDER BY id DESC
-        """)
-        rows = cur.fetchall()
 
-return [dict(r) for r in rows]
-          publication_date,effective_from,status,verification_status,ingested_at FROM documents ORDER BY id DESC''').fetchall()
-    return [dict(r) for r in rows]
+    with db() as con:
+
+        with con.cursor() as cur:
+
+            cur.execute("""
+                SELECT
+                    id,
+                    title,
+                    source_url,
+                    source_authority,
+                    document_type,
+                    jurisdiction,
+                    publication_date,
+                    effective_from,
+                    status,
+                    verification_status,
+                    ingested_at
+                FROM documents
+                ORDER BY id DESC
+            """)
+
+            rows = cur.fetchall()
+
+    return [dict(row) for row in rows]
+
+
+# --------------------------------------------------
+# 14. UPLOAD A LEGAL DOCUMENT
+# --------------------------------------------------
 
 @app.post("/ingest/upload")
-async def ingest_upload(file: UploadFile = File(...), title: str | None = None, source_url: str | None = None,
-                        document_type: str = "unclassified", jurisdiction: str = "Federal",
-                        publication_date: str | None = None, effective_from: str | None = None,
-                        status: str = "unverified"):
+async def ingest_upload(
+    file: UploadFile = File(...),
+    title: str | None = None,
+    source_url: str | None = None,
+    document_type: str = "unclassified",
+    jurisdiction: str = "Federal",
+    publication_date: str | None = None,
+    effective_from: str | None = None,
+    status: str = "unverified",
+):
+
     content = await file.read()
-    if len(content) > 25 * 1024 * 1024: raise HTTPException(413, "Maximum upload size is 25 MB.")
-    text = extract_text(file.filename or "upload.txt", content, file.content_type or "")
-    return save_document(title or Path(file.filename or "Untitled").stem, text, source_url,
-                         authority_for_url(source_url) if source_url else None, document_type, jurisdiction,
-                         publication_date, effective_from, status, "pending")
+
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Maximum upload size is 25 MB.",
+        )
+
+    filename = file.filename or "upload.txt"
+
+    text = extract_text(
+        filename,
+        content,
+        file.content_type or "",
+    )
+
+    return save_document(
+        title or Path(filename).stem,
+        text,
+        source_url,
+        authority_for_url(source_url) if source_url else None,
+        document_type,
+        jurisdiction,
+        publication_date,
+        effective_from,
+        status,
+        "pending",
+    )
+
+
+# --------------------------------------------------
+# 15. INGEST A DOCUMENT FROM A REGISTERED URL
+# --------------------------------------------------
 
 @app.post("/ingest/url")
 def ingest_url(payload: URLIngest):
-    url = str(payload.url); host = urlparse(url).hostname
+
+    url = str(payload.url)
+
+    host = urlparse(url).hostname
+
     if host not in ALLOWED_HOSTS:
-        raise HTTPException(400, "Host not allowlisted. Review and add it to source_registry.json first.")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Host is not allowlisted. Review and add it "
+                "to source_registry.json first."
+            ),
+        )
+
     try:
-        r = requests.get(url, timeout=25, headers={"User-Agent":"NigerianLegalAI/0.1; source ingestion"})
-        r.raise_for_status()
-    except Exception as e: raise HTTPException(400, f"Could not fetch URL: {e}")
-    filename = urlparse(url).path.rsplit("/",1)[-1] or "source.html"
-    text = extract_text(filename, r.content, r.headers.get("content-type",""))
-    return save_document(payload.title or filename, text, url, authority_for_url(url), payload.document_type,
-                         payload.jurisdiction, payload.publication_date, payload.effective_from, payload.status, "pending")
+
+        response = requests.get(
+            url,
+            timeout=25,
+            headers={
+                "User-Agent": "NigerianLegalAI/0.2"
+            },
+        )
+
+        response.raise_for_status()
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not fetch URL: {e}",
+        )
+
+    filename = (
+        urlparse(url).path.rsplit("/", 1)[-1]
+        or "source.html"
+    )
+
+    text = extract_text(
+        filename,
+        response.content,
+        response.headers.get("content-type", ""),
+    )
+
+    return save_document(
+        payload.title or filename,
+        text,
+        url,
+        authority_for_url(url),
+        payload.document_type,
+        payload.jurisdiction,
+        payload.publication_date,
+        payload.effective_from,
+        payload.status,
+        "pending",
+    )
+
+
+# --------------------------------------------------
+# 16. SEARCH DOCUMENT CHUNKS
+# --------------------------------------------------
 
 def search_chunks(question, top_k):
-    terms = [t.lower() for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]{2,}", question)]
-    if not terms: return []
+
+    terms = [
+        term.lower()
+        for term in re.findall(
+            r"[A-Za-z0-9][A-Za-z0-9'-]{2,}",
+            question,
+        )
+    ]
+
+    if not terms:
+        return []
+
     with db() as con:
-        cur = con.cursor()
 
-cur.execute("""
-    SELECT
-        c.id AS chunk_id,
-        c.text_content,
-        c.chunk_index,
-        d.id AS document_id,
-        d.title,
-        d.source_url,
-        d.source_authority,
-        d.document_type,
-        d.jurisdiction,
-        d.publication_date,
-        d.effective_from,
-        d.status,
-        d.verification_status
-    FROM chunks c
-    JOIN documents d ON d.id = c.document_id
-""")
+        with con.cursor() as cur:
 
-rows = cur.fetchall()
-          d.source_authority,d.document_type,d.jurisdiction,d.publication_date,d.effective_from,d.status,d.verification_status
-          FROM chunks c JOIN documents d ON d.id=c.document_id''').fetchall()
-    scored=[]
+            cur.execute("""
+                SELECT
+                    c.id AS chunk_id,
+                    c.text_content,
+                    c.chunk_index,
+                    d.id AS document_id,
+                    d.title,
+                    d.source_url,
+                    d.source_authority,
+                    d.document_type,
+                    d.jurisdiction,
+                    d.publication_date,
+                    d.effective_from,
+                    d.status,
+                    d.verification_status
+                FROM chunks c
+                JOIN documents d
+                    ON d.id = c.document_id
+            """)
+
+            rows = cur.fetchall()
+
+    scored = []
+
     for row in rows:
-        txt=row["text_content"].lower(); score=sum(txt.count(t) for t in set(terms))
-        if score:
-            item=dict(row); item["score"]=score; scored.append(item)
-    return sorted(scored,key=lambda x:x["score"],reverse=True)[:max(1,min(top_k,12))]
+
+        item = dict(row)
+
+        content = item["text_content"].lower()
+
+        score = sum(
+            content.count(term)
+            for term in set(terms)
+        )
+
+        if score > 0:
+            item["score"] = score
+            scored.append(item)
+
+    scored.sort(
+        key=lambda item: item["score"],
+        reverse=True,
+    )
+
+    limit = max(1, min(top_k, 12))
+
+    return scored[:limit]
+
+
+# --------------------------------------------------
+# 17. SEARCH ENDPOINT
+# --------------------------------------------------
 
 @app.post("/search")
 def search(payload: SearchRequest):
-    return {"question":payload.question,"results":search_chunks(payload.question,payload.top_k)}
+
+    results = search_chunks(
+        payload.question,
+        payload.top_k,
+    )
+
+    return {
+        "question": payload.question,
+        "results": results,
+    }
+
+
+# --------------------------------------------------
+# 18. AI LEGAL RESEARCH ENDPOINT
+# --------------------------------------------------
 
 @app.post("/ask")
 def ask(payload: SearchRequest):
-    hits=search_chunks(payload.question,payload.top_k)
+
+    hits = search_chunks(
+        payload.question,
+        payload.top_k,
+    )
+
     if not hits:
-        return {"answer":"No relevant passage was found in the indexed corpus. Ingest verified legal documents before relying on this assistant. It will not invent authorities.","sources":[],"requires_lawyer_review":True}
-    refs=[{k:h.get(k) for k in ("document_id","title","source_url","source_authority","document_type","publication_date","effective_from","status","verification_status","text_content")} for h in hits]
-    key=os.getenv("OPENAI_API_KEY")
-    if not key:
-        return {"answer":"Relevant passages retrieved. Set OPENAI_API_KEY in .env to enable AI-generated answers; inspect the evidence below in the meantime.","sources":refs,"requires_lawyer_review":True}
+
+        return {
+            "answer": (
+                "No relevant passage was found in the indexed "
+                "legal documents. Add relevant legal materials "
+                "before relying on this assistant. It will not "
+                "invent legal authorities."
+            ),
+            "sources": [],
+            "requires_lawyer_review": True,
+        }
+
+    refs = [
+        {
+            key: hit.get(key)
+            for key in (
+                "document_id",
+                "title",
+                "source_url",
+                "source_authority",
+                "document_type",
+                "publication_date",
+                "effective_from",
+                "status",
+                "verification_status",
+                "text_content",
+            )
+        }
+        for hit in hits
+    ]
+
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+
+        return {
+            "answer": (
+                "Relevant passages were retrieved. Configure "
+                "OPENAI_API_KEY to enable AI-generated answers. "
+                "Review the retrieved evidence below in the meantime."
+            ),
+            "sources": refs,
+            "requires_lawyer_review": True,
+        }
+
     try:
+
         from openai import OpenAI
-        client=OpenAI(api_key=key, base_url=os.getenv("OPENAI_BASE_URL") or None)
-        evidence=[]
-        for i,h in enumerate(hits,1):
-            evidence.append(f"[SOURCE {i}]\nTitle: {h['title']}\nAuthority: {h['source_authority']}\nURL: {h['source_url']}\nType: {h['document_type']}\nPublished: {h['publication_date']}\nEffective from: {h['effective_from']}\nStatus: {h['status']}\nVerification: {h['verification_status']}\nPassage:\n{h['text_content']}")
-        system="""You are a Nigerian legal research assistant. Answer only to the extent supported by supplied passages. Never invent statutes, sections, cases, holdings, commencement dates or amendments. Cite material propositions as [SOURCE n] and use the supplied URL. Distinguish legislation, judgments and regulatory guidance. If currency, commencement, repeal, appellate history or applicability is not established, state that it needs verification. Identify missing facts. Always flag that a Nigerian lawyer must review material conclusions."""
-        model=os.getenv("OPENAI_MODEL","gpt-4.1-mini")
-        result=client.chat.completions.create(model=model,temperature=0.1,messages=[{"role":"system","content":system},{"role":"user","content":f"QUESTION:\n{payload.question}\n\nRETRIEVED EVIDENCE:\n"+'\n\n'.join(evidence)}])
-        return {"answer":result.choices[0].message.content,"sources":[{k:h.get(k) for k in ("document_id","title","source_url","source_authority","document_type","publication_date","effective_from","status","verification_status")} for h in hits],"requires_lawyer_review":True}
-    except Exception as e: raise HTTPException(502,f"AI provider call failed: {e}")
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("OPENAI_BASE_URL") or None,
+        )
+
+        evidence = []
+
+        for index, hit in enumerate(hits, 1):
+
+            evidence.append(
+                f"""
+[SOURCE {index}]
+Title: {hit["title"]}
+Authority: {hit["source_authority"]}
+URL: {hit["source_url"]}
+Document type: {hit["document_type"]}
+Published: {hit["publication_date"]}
+Effective from: {hit["effective_from"]}
+Status: {hit["status"]}
+Verification: {hit["verification_status"]}
+
+Passage:
+{hit["text_content"]}
+"""
+            )
+
+        system_prompt = """
+You are a Nigerian legal research assistant.
+
+Answer only to the extent supported by the supplied passages.
+
+Never invent statutes, statutory sections, court cases, holdings,
+commencement dates, amendments or legal authorities.
+
+Cite material propositions using [SOURCE 1], [SOURCE 2], etc.
+Use the supplied source URLs where relevant.
+
+Distinguish legislation, judgments and regulatory guidance.
+
+If the evidence does not establish whether a law is current,
+commenced, amended, repealed, binding or applicable, say so.
+
+Identify material missing facts and uncertainties.
+
+Do not treat retrieved text as proof that a legal authority
+remains in force.
+
+Always state that material legal conclusions require review
+by a qualified Nigerian lawyer.
+"""
+
+        model = os.getenv(
+            "OPENAI_MODEL",
+            "gpt-4.1-mini",
+        )
+
+        result = client.chat.completions.create(
+            model=model,
+            temperature=0.1,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"QUESTION:\n{payload.question}\n\n"
+                        "RETRIEVED EVIDENCE:\n"
+                        + "\n\n".join(evidence)
+                    ),
+                },
+            ],
+        )
+
+        answer = result.choices[0].message.content
+
+        return {
+            "answer": answer,
+            "sources": [
+                {
+                    key: hit.get(key)
+                    for key in (
+                        "document_id",
+                        "title",
+                        "source_url",
+                        "source_authority",
+                        "document_type",
+                        "publication_date",
+                        "effective_from",
+                        "status",
+                        "verification_status",
+                    )
+                }
+                for hit in hits
+            ],
+            "requires_lawyer_review": True,
+        }
+
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "The AI provider request failed. Check the "
+                "provider configuration and deployment logs."
+            ),
+        )
