@@ -1,4 +1,6 @@
-import os, re, json, sqlite3, hashlib
+import os, re, json, hashlib
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -9,12 +11,14 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
 
-load_dotenv()
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / "data"
-DB_PATH = DATA / "legal_ai.sqlite3"
 REGISTRY_PATH = ROOT / "source_registry.json"
 DATA.mkdir(exist_ok=True)
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is not configured")
 with open(REGISTRY_PATH, encoding="utf-8") as f:
     REGISTRY = json.load(f)
 ALLOWED_HOSTS = {urlparse(s["url"]).hostname for s in REGISTRY["sources"]}
@@ -30,23 +34,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 def db():
-    con = sqlite3.connect(DB_PATH)
-    con.row_factory = sqlite3.Row
-    return con
+    return psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=RealDictCursor,
+        sslmode="require",
+    )
+
 
 def init_db():
     with db() as con:
-        con.execute('''CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, source_url TEXT,
-            source_authority TEXT, document_type TEXT, jurisdiction TEXT, publication_date TEXT,
-            effective_from TEXT, status TEXT DEFAULT 'unverified', verification_status TEXT DEFAULT 'pending',
-            sha256 TEXT NOT NULL, text_content TEXT NOT NULL, ingested_at TEXT NOT NULL)''')
-        con.execute('''CREATE TABLE IF NOT EXISTS chunks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER NOT NULL,
-            chunk_index INTEGER NOT NULL, text_content TEXT NOT NULL,
-            FOREIGN KEY(document_id) REFERENCES documents(id))''')
-init_db()
+        with con.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS documents (
+                    id BIGSERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source_url TEXT,
+                    source_authority TEXT,
+                    document_type TEXT,
+                    jurisdiction TEXT,
+                    publication_date TEXT,
+                    effective_from TEXT,
+                    status TEXT DEFAULT 'unverified',
+                    verification_status TEXT DEFAULT 'pending',
+                    sha256 TEXT NOT NULL UNIQUE,
+                    text_content TEXT NOT NULL,
+                    ingested_at TEXT NOT NULL
+                )
+            """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chunks (
+                    id BIGSERIAL PRIMARY KEY,
+                    document_id BIGINT NOT NULL
+                        REFERENCES documents(id) ON DELETE CASCADE,
+                    chunk_index INTEGER NOT NULL,
+                    text_content TEXT NOT NULL
+                )
+            """)
+
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS
+                idx_chunks_document_id
+                ON chunks(document_id)
+            """)
+
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS
+                idx_documents_sha256
+                ON documents(sha256)
+            """)
+
+
+init_db()
 class URLIngest(BaseModel):
     url: HttpUrl
     title: str | None = None
@@ -109,15 +148,38 @@ def save_document(title, text, source_url=None, authority=None, document_type="u
     now = datetime.now(timezone.utc).isoformat()
     pieces = chunk_text(text)
     with db() as con:
-        old = con.execute("SELECT id FROM documents WHERE sha256=?", (sha,)).fetchone()
+        cur = con.cursor()
+with db() as con:
+    with con.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM documents")
+        n = cur.fetchone()["n"]
         if old: return {"document_id": old["id"], "duplicate": True, "message": "Exact text already indexed."}
-        cur = con.execute('''INSERT INTO documents (title,source_url,source_authority,document_type,jurisdiction,
-          publication_date,effective_from,status,verification_status,sha256,text_content,ingested_at)
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (title,source_url,authority,document_type,jurisdiction,publication_date,
-          effective_from,status,verification_status,sha,text,now))
-        doc_id = cur.lastrowid
-        con.executemany("INSERT INTO chunks(document_id,chunk_index,text_content) VALUES(?,?,?)",
-                        [(doc_id,i,c) for i,c in enumerate(pieces)])
+        cur.execute("""
+    INSERT INTO documents (
+        title, source_url, source_authority, document_type,
+        jurisdiction, publication_date, effective_from,
+        status, verification_status, sha256,
+        text_content, ingested_at
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    RETURNING id
+""", (
+    title, source_url, authority, document_type,
+    jurisdiction, publication_date, effective_from,
+    status, verification_status, sha, text, now
+))
+
+doc_id = cur.fetchone()["id"]
+
+cur.executemany(
+    """
+    INSERT INTO chunks (
+        document_id, chunk_index, text_content
+    )
+    VALUES (%s, %s, %s)
+    """,
+    [(doc_id, i, c) for i, c in enumerate(pieces)]
+)
     return {"document_id": doc_id, "chunks_created": len(pieces), "duplicate": False,
             "verification_status": verification_status,
             "note": "Indexed for retrieval; verify identity, current force, amendments and commencement before legal reliance."}
@@ -138,7 +200,20 @@ def sources(): return REGISTRY
 @app.get("/documents")
 def documents():
     with db() as con:
-        rows = con.execute('''SELECT id,title,source_url,source_authority,document_type,jurisdiction,
+        with db() as con:
+    with con.cursor() as cur:
+        cur.execute("""
+            SELECT
+                id, title, source_url, source_authority,
+                document_type, jurisdiction, publication_date,
+                effective_from, status, verification_status,
+                ingested_at
+            FROM documents
+            ORDER BY id DESC
+        """)
+        rows = cur.fetchall()
+
+return [dict(r) for r in rows]
           publication_date,effective_from,status,verification_status,ingested_at FROM documents ORDER BY id DESC''').fetchall()
     return [dict(r) for r in rows]
 
@@ -172,7 +247,28 @@ def search_chunks(question, top_k):
     terms = [t.lower() for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]{2,}", question)]
     if not terms: return []
     with db() as con:
-        rows = con.execute('''SELECT c.id chunk_id,c.text_content,c.chunk_index,d.id document_id,d.title,d.source_url,
+        cur = con.cursor()
+
+cur.execute("""
+    SELECT
+        c.id AS chunk_id,
+        c.text_content,
+        c.chunk_index,
+        d.id AS document_id,
+        d.title,
+        d.source_url,
+        d.source_authority,
+        d.document_type,
+        d.jurisdiction,
+        d.publication_date,
+        d.effective_from,
+        d.status,
+        d.verification_status
+    FROM chunks c
+    JOIN documents d ON d.id = c.document_id
+""")
+
+rows = cur.fetchall()
           d.source_authority,d.document_type,d.jurisdiction,d.publication_date,d.effective_from,d.status,d.verification_status
           FROM chunks c JOIN documents d ON d.id=c.document_id''').fetchall()
     scored=[]
