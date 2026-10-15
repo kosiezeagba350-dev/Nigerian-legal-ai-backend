@@ -465,7 +465,42 @@ def health():
         "database": "connected",
         "indexed_documents": count,
     }
+@app.get("/debug/database")
+def debug_database():
+    with db() as con:
+        with con.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS document_count
+                FROM documents
+            """)
+            document_count = cur.fetchone()["document_count"]
 
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS chunk_count
+                FROM chunks
+            """)
+            chunk_count = cur.fetchone()["chunk_count"]
+
+            cur.execute("""
+                SELECT
+                    id,
+                    title,
+                    LENGTH(text_content) AS text_length
+                FROM documents
+                ORDER BY id DESC
+                LIMIT 5
+            """)
+            documents_found = [
+                dict(row) for row in cur.fetchall()
+            ]
+
+    return {
+        "document_count": document_count,
+        "chunk_count": chunk_count,
+        "documents": documents_found,
+    }
 
 # --------------------------------------------------
 # 12. VIEW REGISTERED SOURCES
